@@ -6,20 +6,45 @@ import torch.nn as nn
 import torch.nn.functional as F
 import tqdm
 from PIL import Image, ImageFilter
-
+import sys
+from cuda import cudart
+# sys.path.append('/workspace/Try-on-Product/projects/Leffa/convert_tensorrt')
+# from utilities import Engine
+import torchvision
 
 class LeffaPipeline(object):
     def __init__(
         self,
         model,
         device="cuda",
+        use_tensorrt=False
     ):
         self.vae = model.vae
         self.unet_encoder = model.unet_encoder
         self.unet = model.unet
         self.noise_scheduler = model.noise_scheduler
         self.device = device
+        self.use_tensorrt = use_tensorrt
+        if use_tensorrt:
+            self.stream = cudart.cudaStreamCreate()[1]
+            self.engines = {}
+            self.engines['unet_encoder']= Engine('/workspace/Try-on-Product/projects/Leffa/ckpts/engines/unet_encoder.trt10.6.0.plan')
+            self.engines['unet_encoder'].load()
+            self.engines['unet_gen']= Engine('/workspace/Try-on-Product/projects/Leffa/ckpts/engines/unet_gen.trt10.6.0.plan')
+            self.engines['unet_gen'].load()
+            max_device_memory = max(self.engines['unet_encoder'].engine.device_memory_size, self.engines['unet_gen'].engine.device_memory_size)
+            _, shared_device_memory = cudart.cudaMalloc(max_device_memory)
 
+            self.engines['unet_encoder'].activate(device_memory=shared_device_memory)
+            self.engines['unet_encoder'].allocate_buffers(
+                shape_dict=None,
+                device='cuda'
+            )
+            self.engines['unet_gen'].activate(device_memory=shared_device_memory)
+            self.engines['unet_gen'].allocate_buffers(
+                shape_dict=None,
+                device='cuda'
+            )
     def prepare_extra_step_kwargs(self, generator, eta):
         # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
         # eta (η) is only used with the DDIMScheduler, it will be ignored for other schedulers.
@@ -62,6 +87,8 @@ class LeffaPipeline(object):
         mask = mask.to(device=self.vae.device, dtype=self.vae.dtype)
         densepose = densepose.to(device=self.vae.device, dtype=self.vae.dtype)
         masked_image = src_image * (mask < 0.5)
+        masked_image_pil = torchvision.transforms.ToPILImage()(masked_image[0].cpu())
+        masked_image_pil.save('/workspace/Try-on-Product/projects/try-on-system/src/masked_image_leffa.png')
 
         # 1. VAE encoding
         with torch.no_grad():
@@ -101,10 +128,23 @@ class LeffaPipeline(object):
         )
 
         if ref_acceleration:
-            down, reference_features = self.unet_encoder(
-                ref_image_latent, timesteps[num_inference_steps//2], encoder_hidden_states=None, return_dict=False
-            )
-            reference_features = list(reference_features)
+            if(self.use_tensorrt):
+                feed_dict = {
+                    'sample': ref_image_latent,
+                    'timestep': timesteps[num_inference_steps//2],
+                }
+                output = self.engines['unet_encoder'].infer(
+                    feed_dict,
+                    self.stream,
+                    use_cuda_graph=False
+                )
+                hidden_states = [val.half() for key, val in output.items() if key.startswith('hidden_states')]
+                reference_features = list([output['reference_features'].half()]+list(hidden_states))
+            else:
+                down, reference_features = self.unet_encoder(
+                    ref_image_latent, timesteps[num_inference_steps//2], encoder_hidden_states=None, return_dict=False
+                )
+                reference_features = list(reference_features)
 
         with tqdm.tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -129,21 +169,54 @@ class LeffaPipeline(object):
                 )
 
                 if not ref_acceleration:
-                    down, reference_features = self.unet_encoder(
-                        ref_image_latent, t, encoder_hidden_states=None, return_dict=False
-                    )
-                    reference_features = list(reference_features)
+                    if(self.use_tensorrt):
+                        feed_dict = {
+                            'sample': ref_image_latent,
+                            'timestep': t,
+                        }
+                        output = self.engines['unet_encoder'].infer(
+                            feed_dict,
+                            self.stream,
+                            use_cuda_graph=False
+                        )
+                        hidden_states = [val.half() for key, val in output.items() if key.startswith('hidden_states')]
+                        reference_features = list([output['reference_features'].half()]+list(hidden_states))
+                    else:
+                        down, reference_features = self.unet_encoder(
+                            ref_image_latent, t, encoder_hidden_states=None, return_dict=False
+                        )
+                        reference_features = list(reference_features)
 
                 # predict the noise residual
-                noise_pred = self.unet(
-                    latent_model_input,
-                    t,
-                    encoder_hidden_states=None,
-                    cross_attention_kwargs=None,
-                    added_cond_kwargs=None,
-                    reference_features=reference_features,
-                    return_dict=False,
-                )[0]
+                if(self.use_tensorrt):
+                    feed_dict = {
+                        'sample': latent_model_input,
+                        'timestep': t,
+                        # 'cross_attention_kwargs': None,
+                        # 'added_cond_kwargs': None,
+                        # 'return_dict': False,
+                    }
+                    # Cast 3 -> 18
+                    # for i in range(6,18):
+                    for i in range(3,19):
+                        key= 'onnx::Cast_'+str(i)
+                        feed_dict.update({key: reference_features[i-3]})
+                    output = self.engines['unet_gen'].infer(
+                        feed_dict,
+                        self.stream,
+                        use_cuda_graph=False
+                    )
+                    noise_pred = output['noise_pred']
+                else: 
+                    noise_pred = self.unet(
+                        latent_model_input,
+                        t,
+                        encoder_hidden_states=None,
+                        cross_attention_kwargs=None,
+                        added_cond_kwargs=None,
+                        reference_features=reference_features,
+                        return_dict=False,
+                    )[0]
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)

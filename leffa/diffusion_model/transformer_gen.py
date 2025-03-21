@@ -420,7 +420,10 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     batch_size=batch_size,
                     hidden_dtype=hidden_states.dtype,
                 )
-
+        ###################################################################################################
+        cross_attention_kwargs['height'] = height
+        cross_attention_kwargs['width'] = width
+        ###################################################################################################
         # 2. Blocks
         if self.caption_projection is not None:
             batch_size = hidden_states.shape[0]

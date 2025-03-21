@@ -1224,6 +1224,12 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         this_reference_feature_idx = 0
 
         # 3. down
+        ################################################################################
+        if cross_attention_kwargs is None:
+            cross_attention_kwargs = {'timestep' : timestep}
+        else:
+            cross_attention_kwargs['timestep'] = timestep
+        ################################################################################
         lora_scale = (
             cross_attention_kwargs.get("scale", 1.0)
             if cross_attention_kwargs is not None
@@ -1270,6 +1276,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     additional_residuals["additional_residuals"] = (
                         down_intrablock_additional_residuals.pop(0)
                     )
+                # reference_features_shape= ((2, 12288, 320),)*2 + ((2, 3072, 640),)*2 + ((2, 768, 1280), )*2 + ((2, 192, 1280),) + ((2, 768, 1280), )*3 + ((2, 3072, 640), )*3 + ((2, 12288, 320) ,)*3
 
                 sample, res_samples, this_reference_feature_idx = downsample_block(
                     hidden_states=sample,

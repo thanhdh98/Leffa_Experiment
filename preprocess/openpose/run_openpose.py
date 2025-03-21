@@ -19,7 +19,8 @@ from PIL import Image
 import torch
 import pdb
 
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 class OpenPose:
     def __init__(self, body_model_path):

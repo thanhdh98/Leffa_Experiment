@@ -122,7 +122,7 @@ class LeffaModel(nn.Module):
         # Load pretrained model
         if pretrained_model != "" and pretrained_model is not None:
             self.load_state_dict(torch.load(
-                pretrained_model, map_location="cpu"))
+                pretrained_model, map_location="cpu"),strict=False)
             logger.info(
                 "Load pretrained model from {}".format(pretrained_model))
 

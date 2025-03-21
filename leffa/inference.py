@@ -4,7 +4,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from leffa.pipeline import LeffaPipeline
-
+from attention_map_diffusers import (
+    attn_maps,
+    init_pipeline,
+    save_attention_maps
+)
 
 def pil_to_tensor(images):
     images = np.array(images).astype(np.float32) / 255.0
@@ -23,6 +27,7 @@ class LeffaInference(object):
         self.model.eval()
 
         self.pipe = LeffaPipeline(model=self.model)
+        self.pipe = init_pipeline(self.pipe) # set up hooks for attention maps
 
     def to_gpu(self, data: Dict[str, Any]) -> Dict[str, Any]:
         for k, v in data.items():

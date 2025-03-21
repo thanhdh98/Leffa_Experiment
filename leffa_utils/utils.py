@@ -5,7 +5,27 @@ import numpy as np
 from numpy.linalg import lstsq
 from PIL import Image, ImageDraw
 
-
+PARSING_MAP = {
+    "background": 0,
+    "hat": 1,
+    "hair": 2,
+    "sunglasses": 3,
+    "upper_clothes": 4,
+    "skirt": 5,
+    "pants": 6,
+    "dress": 7,
+    "belt": 8,
+    "left_shoe": 9,
+    "right_shoe": 10,
+    "face": 11,
+    "left_leg": 12,
+    "right_leg": 13,
+    "left_arm": 14,
+    "right_arm": 15,
+    "bag": 16,
+    "scarf": 17,
+    "toro_skin": 18,
+}
 def resize_and_center(image, target_width, target_height):
     img = np.array(image)
 
@@ -255,7 +275,12 @@ def get_agnostic_mask_dc(model_parse, keypoint, category, size=(384, 512)):
                         (parse_array == label_map["sunglasses"]).astype(np.float32) + \
                         (parse_array == label_map["scarf"]).astype(np.float32) + \
                         (parse_array == label_map["bag"]).astype(np.float32)
-
+    # foot_mask_pil = Image.open('/workspace/Try-on-Product/projects/try-on-system/src/foot_mask.png')
+    # foot_mask = np.array(foot_mask_pil.resize(size, Image.NEAREST))
+    # foot_mask = foot_mask.astype(np.float32)
+    # parser_mask_fixed += foot_mask
+    # parser_mask_fixed_pil = Image.fromarray(parser_mask_fixed.astype(np.uint8)*255)
+    # parser_mask_fixed_pil.save("parser_mask_fixed.png")
     parser_mask_changeable = (
         parse_array == label_map["background"]).astype(np.float32)
 
@@ -291,15 +316,15 @@ def get_agnostic_mask_dc(model_parse, keypoint, category, size=(384, 512)):
         parser_mask_changeable += np.logical_and(
             parse_array, np.logical_not(parser_mask_fixed))
 
-    parse_head = torch.from_numpy(parse_head)  # [0,1]
-    parse_mask = torch.from_numpy(parse_mask)  # [0,1]
-    parser_mask_fixed = torch.from_numpy(parser_mask_fixed)
-    parser_mask_changeable = torch.from_numpy(parser_mask_changeable)
+    # parse_head = torch.from_numpy(parse_head)  # [0,1]
+    # parse_mask = torch.from_numpy(parse_mask)  # [0,1]
+    # parser_mask_fixed = torch.from_numpy(parser_mask_fixed)
+    # parser_mask_changeable = torch.from_numpy(parser_mask_changeable)
 
     # dilation
     parse_without_cloth = np.logical_and(
         parse_shape, np.logical_not(parse_mask))
-    parse_mask = parse_mask.cpu().numpy()
+    # parse_mask = parse_mask.cpu().numpy()
 
     width = size[0]
     height = size[1]
@@ -342,7 +367,8 @@ def get_agnostic_mask_dc(model_parse, keypoint, category, size=(384, 512)):
         parser_mask_fixed += hands
 
     # delete neck
-    parse_head_2 = torch.clone(parse_head)
+    # parse_head_2 = torch.clone(parse_head)
+    parse_head_2 = np.copy(parse_head)
     if category == 'dresses' or category == 'upper_body':
         points = []
         points.append(np.multiply(pose_data[2, :2], height / 512.0))
@@ -354,10 +380,13 @@ def get_agnostic_mask_dc(model_parse, keypoint, category, size=(384, 512)):
             y = i * m + c
             parse_head_2[int(y - 20 * (height / 512.0)):, i] = 0
 
-    parser_mask_fixed = np.logical_or(
-        parser_mask_fixed, np.array(parse_head_2, dtype=np.uint16))
-    parse_mask += np.logical_or(parse_mask, np.logical_and(np.array(parse_head, dtype=np.uint16),
-                                                           np.logical_not(np.array(parse_head_2, dtype=np.uint16))))
+    # parser_mask_fixed = np.logical_or(
+    #     parser_mask_fixed, np.array(parse_head_2, dtype=np.uint16))
+    # parse_mask += np.logical_or(parse_mask, np.logical_and(np.array(parse_head, dtype=np.uint16),
+    #                                                        np.logical_not(np.array(parse_head_2, dtype=np.uint16))))
+    parser_mask_fixed = np.logical_or(parser_mask_fixed, parse_head_2)
+    parse_mask += np.logical_or(parse_mask, 
+                                np.logical_and(parse_head, np.logical_not(parse_head_2)))
 
     if height > 512:
         parse_mask = cv2.dilate(parse_mask, np.ones(
@@ -374,7 +403,12 @@ def get_agnostic_mask_dc(model_parse, keypoint, category, size=(384, 512)):
     inpaint_mask = 1 - parse_mask_total
     img = np.where(inpaint_mask, 255, 0)
     img = hole_fill(img.astype(np.uint8))
-    inpaint_mask = img / 255 * 1
+    # img = img/255-foot_mask
+    img = img /255
+    shoe_mask = (parse_array == label_map["left_shoe"]).astype(np.float32) + \
+                (parse_array == label_map["right_shoe"]).astype(np.float32)
+    img = img - shoe_mask
+    inpaint_mask = img
     mask = Image.fromarray(inpaint_mask.astype(np.uint8) * 255)
     return mask
 

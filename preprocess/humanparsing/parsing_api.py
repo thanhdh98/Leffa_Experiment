@@ -176,6 +176,10 @@ def onnx_inference(session, lip_session, input_dir):
     # add neck parsing result
     neck_mask = np.logical_and(np.logical_not((parsing_result_lip == 13).astype(np.float32)),
                                (parsing_result == 11).astype(np.float32))
+    pants_lip_mask = (parsing_result_lip == 9).astype(np.float32) # pants in LIP
+    parsing_result = np.where(pants_lip_mask, 6, parsing_result) # add more region of pants form LIP
+    upper_lip_mask = (parsing_result_lip == 5).astype(np.float32) # upper cloth in LIP
+    parsing_result = np.where(upper_lip_mask, 4, parsing_result) # add more region of upper cloth from LIP
     parsing_result = np.where(neck_mask, 18, parsing_result)
     palette = get_palette(19)
     output_img = Image.fromarray(np.asarray(parsing_result, dtype=np.uint8))

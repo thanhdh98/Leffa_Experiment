@@ -29,7 +29,7 @@ from diffusers.models.normalization import (
 from diffusers.utils import USE_PEFT_BACKEND
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from torch import nn
-
+import inspect
 
 def _chunked_feed_forward(
     ff: nn.Module,
@@ -378,13 +378,19 @@ class BasicTransformerBlock(nn.Module):
             [norm_hidden_states, reference_features[this_reference_feature_idx]], dim=1
         )
         this_reference_feature_idx += 1
+        ###############################################################################
+        attn_parameters = set(inspect.signature(self.attn1.processor.__call__).parameters.keys())
+        ###############################################################################
         attn_output = self.attn1(
             modify_norm_hidden_states,
             encoder_hidden_states=(
                 encoder_hidden_states if self.only_cross_attention else None
             ),
             attention_mask=attention_mask,
-            **cross_attention_kwargs,
+            # **cross_attention_kwargs,
+            ###############################################################################
+            **{k: w for k, w in cross_attention_kwargs.items() if k in attn_parameters},
+            ###############################################################################
         )
         if self.use_ada_layer_norm_zero:
             attn_output = gate_msa.unsqueeze(1) * attn_output

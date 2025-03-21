@@ -11,7 +11,8 @@ from preprocess.humanparsing.run_parsing import Parsing
 from preprocess.openpose.run_openpose import OpenPose
 
 import gradio as gr
-
+import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 # Download checkpoints
 snapshot_download(repo_id="franciszzj/Leffa", local_dir="./ckpts")
 
@@ -36,12 +37,12 @@ class LeffaPredictor(object):
             body_model_path="./ckpts/openpose/body_pose_model.pth",
         )
 
-        vt_model_hd = LeffaModel(
-            pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
-            pretrained_model="./ckpts/virtual_tryon.pth",
-            dtype="float16",
-        )
-        self.vt_inference_hd = LeffaInference(model=vt_model_hd)
+        # vt_model_hd = LeffaModel(
+        #     pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
+        #     pretrained_model="./ckpts/virtual_tryon.pth",
+        #     dtype="float16",
+        # )
+        # self.vt_inference_hd = LeffaInference(model=vt_model_hd)
 
         vt_model_dc = LeffaModel(
             pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
@@ -50,12 +51,12 @@ class LeffaPredictor(object):
         )
         self.vt_inference_dc = LeffaInference(model=vt_model_dc)
 
-        pt_model = LeffaModel(
-            pretrained_model_name_or_path="./ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
-            pretrained_model="./ckpts/pose_transfer.pth",
-            dtype="float16",
-        )
-        self.pt_inference = LeffaInference(model=pt_model)
+        # pt_model = LeffaModel(
+        #     pretrained_model_name_or_path="./ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
+        #     pretrained_model="./ckpts/pose_transfer.pth",
+        #     dtype="float16",
+        # )
+        # self.pt_inference = LeffaInference(model=pt_model)
 
     def leffa_predict(
         self,
@@ -98,6 +99,7 @@ class LeffaPredictor(object):
                 mask = get_agnostic_mask_hd(model_parse, keypoints, vt_garment_type)
             elif vt_model_type == "dress_code":
                 mask = get_agnostic_mask_dc(model_parse, keypoints, vt_garment_type)
+                # mask = Image.open("/workspace/Try-on-Product/projects/Leffa/image - 2025-02-28T153600.272.png")
             mask = mask.resize((768, 1024))
         elif control_type == "pose_transfer":
             mask = Image.fromarray(np.ones_like(src_image_array) * 255)
@@ -268,7 +270,7 @@ if __name__ == "__main__":
                             value=False,
                         )
                         vt_step = gr.Number(
-                            label="Inference Steps", minimum=30, maximum=100, step=1, value=30)
+                            label="Inference Steps", minimum=1, maximum=100, step=1, value=30)
                         vt_scale = gr.Number(
                             label="Guidance Scale", minimum=0.1, maximum=5.0, step=0.1, value=2.5)
                         vt_seed = gr.Number(
