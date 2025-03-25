@@ -43,8 +43,8 @@ from diffusers.models.attention_processor import (
 
 
 logger = logging.get_logger(__name__)
-
-
+from PIL import Image
+import torchvision
 attn_maps = {}
 
 
@@ -1916,47 +1916,36 @@ def attn_call2_0(
         #     'batch attn_head (h w) attn_dim -> batch attn_head h w attn_dim ', # 12288 x 2 = 128 x 96 x 2
         #     h=height
         # ) # detach height*width
-        query_view =rearrange(query.mean(1), 'b (h w) d -> b h w d', h=height*2)
-        query_view_1 = query_view[:,:,:,20]
-        key_view =rearrange(key.mean(1), 'b (h w) d -> b h w d', h=height*2)
-        key_view_1 = key_view[:,:,:,20]
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
         query_a = query[:,:,:sequence_length//2,:]
         key_a = key[:,:,sequence_length//2:,:]
-        # query_a = query[:,:,:sequence_length//2,:]
-        # key_a = key[:,:,:sequence_length//2,:]
-        # query_a = query[:,:,sequence_length//2:,:] # query middle see person
-        # key_a = key[:,:,:sequence_length//2,:]
-        # query_a = query[:,:,sequence_length//2:,:] # query middle see cloth
-        # key_a = key[:,:,sequence_length//2:,:]
-        query_a_view =rearrange(query_a.mean(1), 'b (h w) d -> b h w d', h=height)
-        query_a_view_1 = query_a_view[:,:,:,20]
-        key_a_view = rearrange(key_a.mean(1), 'b (h w) d -> b h w d', h=height)
-        key_a_view_1 = key_a_view[:,:,:,20]
-        scale_factor = 1 / math.sqrt(query.size(-1))
-        attention_scores = torch.einsum('bhqd,bhkd->bhqk', query_a, key_a) * scale_factor
-        attn_weights = F.softmax(attention_scores / math.sqrt(query_a.size(-1)), dim=-1)
-        attn_weights_mean = attn_weights.mean(dim=1)
+        # query_a_view =rearrange(query_a.mean(1), 'b (h w) d -> b h w d', h=height)
+        # query_a_view_1 = query_a_view[:,:,:,20]
+        # key_a_view = rearrange(key_a.mean(1), 'b (h w) d -> b h w d', h=height)
+        # key_a_view_1 = key_a_view[:,:,:,20]
+        scale_factor = 1 / math.sqrt(query_a.size(-1))
+        attention_scores = query_a @ key_a.transpose(-2, -1) * scale_factor
+        attn_weights = torch.softmax(attention_scores, dim=-1)
+        attn_weights_mean = attn_weights.mean(dim=1) # A_hat_l
         self.attn_map = rearrange(
             attn_weights_mean,
             'batch attn_dim (height width)-> batch attn_dim height width',
-            # 'batch (height width) attn_dim-> batch height width attn_dim',
             height = height
         )
-        # x1=torch.sum(self.attn_map[:,:,:,1000:2000],dim=-1)[0]
-        # x2=torch.sum(self.attn_map[:,:,:,2000:3000],dim=-1)[0]
-        x3=torch.sum(self.attn_map[:,3000:4000,:,:],dim=1)
-        x4=torch.sum(self.attn_map[:,4000:5000,:,:],dim=1)
-        # x5=torch.sum(self.attn_map[:,5000:6000,:,:],dim=1)
-        # x6=torch.sum(self.attn_map[:,6000:7000,:,:],dim=1)
-        # x7=torch.sum(self.attn_map[:,7000:8000,:,:],dim=1)
-        # x8=torch.sum(self.attn_map[:,8000:9000,:,:],dim=1)
-        # x9=torch.sum(self.attn_map[:,9000:10000,:,:],dim=1)
-        # x10=torch.sum(self.attn_map[:,10000:11000,:,:],dim=1)
-        # x11=torch.sum(self.attn_map[:,11000:12000,:,:],dim=1)
-        # x_all = torch.sum(self.attn_map,dim=1)[0]
+        x_k = self.attn_map[:,1000,:,:]
+        c_l = get_normalized_coordinate_map(height, width, query.device)
+        c_l_0_view= rearrange(c_l[:,:,0], 'b (h w) -> b h w',h=height)
+        c_l_1_view= rearrange(c_l[:,:,1], 'b (h w) -> b h w',h=height)
+        flow_feild_l = compute_flow_field(attn_weights_mean, c_l)
+        F_l = rearrange(flow_feild_l, 'b (h w) d -> b h w d',h=height)
+        F_l_up = upsample_flow_field(F_l, 1024,768)
+        ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/m_050203_1_short_Chino-Shorts.jpg")
+        # ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/01486_00.jpg")
+        ref_img_tensor = torchvision.transforms.ToTensor()(ref_img_pil).unsqueeze(0).to(query.device)
+        ref_img_tensor = ref_img_tensor.repeat(batch_size, 1, 1, 1)
+        wrap_cloth = warp_image(ref_img_tensor, F_l_up)
         self.timestep = int(timestep.item())
     else:
         hidden_states = F.scaled_dot_product_attention(
@@ -2252,3 +2241,79 @@ def flux_attn_call2_0(
         return hidden_states, encoder_hidden_states
     else:
         return hidden_states
+    
+def get_normalized_coordinate_map(H, W, device):
+    """
+    Generate a normalized coordinate map.
+    Args:
+        H: Height of the image
+        W: Width of the image
+        device: Device to store the tensor
+    Returns:
+        Coordinate map of shape (1, H*W, 2)
+    """
+    y_coords, x_coords = torch.meshgrid(
+        torch.linspace(-1, 1, H, device=device),
+        torch.linspace(-1, 1, W, device=device),
+        indexing='ij'
+    )
+    coords = torch.stack([x_coords, y_coords], dim=-1)  # (H, W, 2)
+    coords = coords.view(1, H * W, 2)  # Reshape to (1, H*W, 2)
+    return coords
+
+def compute_flow_field(A, coords):
+    """
+    Compute the flow field by multiplying the attention map with the coordinate map.
+    Args:
+        A: Averaged attention map (B, N, N)
+        coords: Coordinate map (B, N, 2)
+    Returns:
+        Flow field (B, N, 2)
+    """
+    # F_l = coords.expand(A.size(0), -1, -1)
+    # F_l = torch.matmul(A, coords.to(A.dtype))  # Weighted sum of coordinates
+    # A_all = torch.sum(A,dim=1)
+    A_k = torch.mean(A,dim=1)
+    F_l = coords.expand(A.size(0), -1, -1) * A_k.unsqueeze(-1)  # (B, N, 2)s
+    return F_l
+
+def upsample_flow_field(F_l, H, W):
+    """
+    Upsample the flow field to match the target image resolution.
+    Args:
+        F_l: Flow field at latent resolution (B, h, w, 2)
+        H, W: Target image resolution
+    Returns:
+        Upsampled flow field (B, H, W, 2)
+    """
+    F_l = F_l.permute(0, 3, 1, 2)  # (B, 2, h, w)
+    F_l_up = F.interpolate(F_l, size=(H, W), mode='bilinear', align_corners=False)
+    F_l_up = F_l_up.permute(0, 2, 3, 1)  # Back to (B, H, W, 2)
+    return F_l_up
+
+def warp_image(I_ref, F_l_up):
+    """
+    Warp the reference image using the upsampled flow field.
+    Args:
+        I_ref: Reference image (B, C, H, W)
+        F_l_up: Flow field (B, H, W, 2)
+    Returns:
+        Warped image (B, C, H, W)
+    """
+    B, C, H, W = I_ref.shape
+    y_coords, x_coords = torch.meshgrid(
+            torch.linspace(-1, 1, H, device=F_l_up.device),
+            torch.linspace(-1, 1, W, device=F_l_up.device),
+            indexing='ij'
+        )
+    grid = torch.stack([x_coords, y_coords], dim=-1)  # (H, W, 2)
+    grid = grid.unsqueeze(0).repeat(B, 1, 1, 1)  # (B, H, W, 2)
+    # warped_grid = grid + F_l_up
+    warped_grid = F_l_up
+    # flow = torch.load("/workspace/Try-on-Product/projects/Leffa/flow.pt")
+    # flow_down = F.interpolate(flow, size=(128, 96), mode='bilinear', align_corners=False)
+    # warped_image_test = F.grid_sample(I_ref[0].unsqueeze(0).float(), flow.permute(0, 2, 3, 1),
+    #                                 mode='bilinear', padding_mode='border')
+    warped_image = F.grid_sample(I_ref[0].unsqueeze(0).float(), warped_grid[0].unsqueeze(0).float(),
+                                    mode='bilinear', padding_mode='border')
+    return warped_image
