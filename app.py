@@ -74,6 +74,7 @@ class LeffaPredictor(object):
     ):
         # Open and resize the source image.
         src_image = Image.open(src_image_path)
+        src_image_test = src_image.resize((96, 128))
         src_image = resize_and_center(src_image, 768, 1024)
 
         # For virtual try-on, optionally preprocess the garment (reference) image.
