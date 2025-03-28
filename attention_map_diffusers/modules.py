@@ -1921,12 +1921,14 @@ def attn_call2_0(
         )
         self.timestep = int(timestep.item())
         if(self.timestep <500):
-            query_a = query[:,:,:sequence_length//2,:]
-            key_a = key[:,:,sequence_length//2:,:]
-            query_a_view =rearrange(query_a.mean(1), 'b (h w) d -> b h w d', h=height)
-            query_a_view_1 = query_a_view[:,:,:,20]
-            key_a_view = rearrange(key_a.mean(1), 'b (h w) d -> b h w d', h=height)
-            key_a_view_1 = key_a_view[:,:,:,20]
+            query_a = query[:,:,:sequence_length//2,:].detach().clone()
+            key_a = key[:,:,sequence_length//2:,:].detach().clone()
+            # query_a_1 = attn.to_q(encoder_hidden_states[:,:sequence_length//2,:])
+            # key_a_1 = attn.to_k(encoder_hidden_states[:,sequence_length//2:,:])
+            # query_a_view =rearrange(query_a.mean(1), 'b (h w) d -> b h w d', h=height)
+            # query_a_view_1 = query_a_view[:,:,:,20]
+            # key_a_view = rearrange(key_a.mean(1), 'b (h w) d -> b h w d', h=height)
+            # key_a_view_1 = key_a_view[:,:,:,20]
             scale_factor = 1 / math.sqrt(query_a.size(-1))
             attention_scores = query_a @ key_a.transpose(-2, -1) * scale_factor
             attn_weights = torch.softmax(attention_scores/2, dim=-1)
@@ -1936,23 +1938,33 @@ def attn_call2_0(
                 'batch attn_dim (height width)-> batch attn_dim height width',
                 height = height
             )
-            x_, y_ = 317// (1024//height),  620//(768//width)
-            q_inx = x_*width + y_
-            x_q = self.attn_map[:,q_inx,:,:]
-            x_q_0 = x_q[0]
-            x_q_1 = x_q[1]
+            # x_, y_ = 317// (1024//height),  620//(768//width)
+            # q_inx = x_*width + y_
+            # x_q = self.attn_map[:,q_inx,:,:]
+            # x_q_0 = x_q[0]
+            # x_q_1 = x_q[1]
             c_l = get_normalized_coordinate_map(height, width, query.device)
-            c_l_0_view= rearrange(c_l[:,:,0], 'b (h w) -> b h w',h=height)
-            c_l_1_view= rearrange(c_l[:,:,1], 'b (h w) -> b h w',h=height)
-            flow_field_l = compute_flow_field(attn_weights_mean, c_l)
-            F_l = rearrange(flow_field_l, 'b (h w) d -> b h w d',h=height)
-            F_l_up = upsample_flow_field(F_l, 1024,768)
-
-            ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/image - 2025-03-20T172556.938 (1).png")
+            # c_l_0_view= rearrange(c_l[:,:,0], 'b (h w) -> b h w',h=height)
+            # c_l_1_view= rearrange(c_l[:,:,1], 'b (h w) -> b h w',h=height)
+            # Caculate flow field
+            F_l = torch.matmul(attn_weights_mean, c_l.to(attn_weights_mean.dtype))  # Weighted sum of coordinates
+            F_l = rearrange(F_l, 'b (h w) d -> b h w d',h=height)
+            # Upsample flow field
+            F_l = F_l.permute(0, 3, 1, 2)  # (B, 2, h, w)
+            F_l_up = F.interpolate(F_l, size=(1024, 768), mode='bilinear', align_corners=False)
+            F_l_up = F_l_up.permute(0, 2, 3, 1)  # Back to (B, H, W, 2)
+            # ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/image - 2025-03-20T172556.938 (1).png")
             # ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/m_050203_1_short_Chino-Shorts.jpg")
+            ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/01486_00.jpg").resize((768,1024))
+            # ref_img_pil = Image.open("/workspace/Try-on-Product/projects/Leffa/00094_00.jpg").resize((768,1024))
             ref_img_tensor = torchvision.transforms.ToTensor()(ref_img_pil).unsqueeze(0).to(query.device)
             ref_img_tensor = ref_img_tensor.repeat(batch_size, 1, 1, 1)
-            wrap_cloth = warp_image(ref_img_tensor, F_l_up)
+            # Warp the image
+            warped_grid_norm = (F_l_up - F_l_up.min()) / (F_l_up.max() - F_l_up.min()) * 2 - 1  # [-1, 1]
+            warped_image = F.grid_sample(ref_img_tensor[0].unsqueeze(0).float(), F_l_up[1].unsqueeze(0).float(),
+                                            mode='bilinear', padding_mode='border', align_corners=True)
+            warped_image_1 = F.grid_sample(ref_img_tensor[0].unsqueeze(0).float(), warped_grid_norm[1].unsqueeze(0).float(),
+                                            mode='bilinear', padding_mode='border', align_corners=True)
             print('a')
     else:
         hidden_states = F.scaled_dot_product_attention(
@@ -2278,10 +2290,9 @@ def compute_flow_field(A, coords):
         Flow field (B, N, 2)
     """
     # F_l = coords.expand(A.size(0), -1, -1)
+    # A_norm=(A-torch.min(A, dim=-1,keepdim=True)[0]) / (torch.max(A, dim=-1,keepdim=True)[0] - torch.min(A, dim=-1,keepdim=True)[0])
+    # F_l = torch.matmul(A_norm, coords.to(A.dtype))  # Weighted sum of coordinates
     F_l = torch.matmul(A, coords.to(A.dtype))  # Weighted sum of coordinates
-    # A_all = torch.sum(A,dim=1)
-    # A_k = torch.mean(A,dim=1)
-    # F_l = coords.expand(A.size(0), -1, -1) * A_all.unsqueeze(-1)  # (B, N, 2)s
     return F_l
 
 def upsample_flow_field(F_l, H, W):
@@ -2326,6 +2337,10 @@ def warp_image(I_ref, F_l_up):
     # flow_down = F.interpolate(flow, size=(128, 96), mode='bilinear', align_corners=False)
     # warped_image_test = F.grid_sample(I_ref[0].unsqueeze(0).float(), flow.permute(0, 2, 3, 1),
     #                                 mode='bilinear', padding_mode='border')
+    warped_grid_norm = (warped_grid - warped_grid.min()) / (warped_grid.max() - warped_grid.min()) * 2 - 1  # [-1, 1]
     warped_image = F.grid_sample(I_ref[0].unsqueeze(0).float(), warped_grid[1].unsqueeze(0).float(),
                                     mode='bilinear', padding_mode='border', align_corners=True)
+    warped_image_1 = F.grid_sample(I_ref[0].unsqueeze(0).float(), warped_grid_norm[1].unsqueeze(0).float(),
+                                    mode='bilinear', padding_mode='border', align_corners=True)
+    
     return warped_image

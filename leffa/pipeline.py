@@ -257,7 +257,7 @@ class LeffaPipeline(object):
                 do_repaint(_src_image, _mask, _gen_image)
                 for _src_image, _mask, _gen_image in zip(src_image, mask, gen_image)
             ]
-
+        view_image = gen_image[0].resize((96,128))
         return (gen_image,)
 
 
